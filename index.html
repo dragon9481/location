@@ -27,8 +27,8 @@
             align-items: center;
         }
         #locateButton {
-            font-size: 18px;
-            padding: 15px 30px;
+            font-size: 20px;
+            padding: 18px 35px;
             background-color: #4CAF50;
             color: white;
             border: none;
@@ -44,6 +44,28 @@
             width: 100%;
             display: none;
         }
+        #searchContainer {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+        }
+        #searchButton {
+            background-color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            cursor: pointer;
+        }
+        #searchInput {
+            display: none;
+            margin-top: 10px;
+            width: 250px;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
     </style>
 </head>
 <body>
@@ -52,11 +74,15 @@
             <button id="locateButton">Localizar</button>
         </div>
         <div id="map"></div>
+        <div id="searchContainer">
+            <button id="searchButton">🔍</button>
+            <input type="text" id="searchInput" placeholder="Buscar dirección...">
+        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script>
-        var map, userMarker, routeLayer;
+        var map, userMarker, routeLayer, currentRoute, start, end;
 
         document.getElementById('locateButton').addEventListener('click', function() {
             this.style.display = 'none';
@@ -65,6 +91,17 @@
                 initMap();
             } else {
                 map.invalidateSize();
+            }
+        });
+
+        document.getElementById('searchButton').addEventListener('click', function() {
+            var searchInput = document.getElementById('searchInput');
+            searchInput.style.display = searchInput.style.display === 'block' ? 'none' : 'block';
+        });
+
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchLocation(this.value);
             }
         });
 
@@ -78,7 +115,7 @@
                 maxZoom: 19,
             }).addTo(map);
 
-            map.locate({setView: true, maxZoom: 16});
+            map.locate({setView: true, maxZoom: 16, watch: true});
             map.on('locationfound', onLocationFound);
             map.on('locationerror', onLocationError);
             map.on('click', onMapClick);
@@ -88,11 +125,18 @@
             var radius = e.accuracy / 2;
 
             if (userMarker) {
-                map.removeLayer(userMarker);
+                userMarker.setLatLng(e.latlng);
+            } else {
+                userMarker = L.marker(e.latlng).addTo(map)
+                    .bindPopup("Estás aquí").openPopup();
             }
 
-            userMarker = L.marker(e.latlng).addTo(map)
-                .bindPopup("Estás aquí").openPopup();
+            if (routeLayer && end) {
+                map.removeLayer(routeLayer);
+                getRoute(e.latlng, end);
+            }
+
+            map.setView(e.latlng);
 
             L.circle(e.latlng, radius).addTo(map);
         }
@@ -107,8 +151,8 @@
                 return;
             }
 
-            var start = userMarker.getLatLng();
-            var end = e.latlng;
+            start = userMarker.getLatLng();
+            end = e.latlng;
 
             getRoute(start, end);
         }
@@ -123,16 +167,68 @@
                         map.removeLayer(routeLayer);
                     }
 
-                    var route = data.routes[0].geometry;
-                    routeLayer = L.geoJSON(route, {
+                    currentRoute = data.routes[0].geometry;
+                    routeLayer = L.geoJSON(currentRoute, {
                         style: {color: 'blue', weight: 5, opacity: 0.7}
                     }).addTo(map);
 
                     map.fitBounds(routeLayer.getBounds(), {padding: [30, 30]});
+
+                    monitorProgress(start, end);
                 })
                 .catch(error => {
                     console.error('Error:', error);
                     alert("Hubo un error al obtener la ruta. Por favor, intenta de nuevo.");
+                });
+        }
+
+        function monitorProgress(start, end) {
+            map.on('locationfound', function(e) {
+                if (routeLayer) {
+                    var distanceToEnd = e.latlng.distanceTo(end);
+                    if (distanceToEnd < 10) {
+                        alert("Ha llegado a su destino!");
+                        map.removeLayer(routeLayer);
+                        routeLayer = null;
+                        return;
+                    }
+
+                    // Update the route and remove past sections
+                    var newRoute = currentRoute.coordinates.filter(function(coord) {
+                        var point = L.latLng(coord[1], coord[0]);
+                        return e.latlng.distanceTo(point) > 5;
+                    });
+
+                    routeLayer.clearLayers();
+                    routeLayer.addData({type: "LineString", coordinates: newRoute});
+
+                    currentRoute.coordinates = newRoute;
+                }
+            });
+        }
+
+        function searchLocation(query) {
+            var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.length > 0) {
+                        var location = data[0];
+                        end = L.latLng(location.lat, location.lon);
+                        if (userMarker) {
+                            start = userMarker.getLatLng();
+                            getRoute(start, end);
+                        } else {
+                            map.setView(end, 16);
+                        }
+                    } else {
+                        alert("Dirección no encontrada.");
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert("Hubo un error al buscar la dirección. Por favor, intenta de nuevo.");
                 });
         }
     </script>
