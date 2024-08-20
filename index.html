@@ -44,13 +44,19 @@
             width: 100%;
             display: none;
         }
-        #searchContainer {
+        #searchContainer, #controlContainer {
             position: absolute;
             top: 10px;
-            right: 10px;
             z-index: 1000;
+            transition: all 0.3s ease;
         }
-        #searchButton, #centerButton {
+        #searchContainer {
+            right: 10px;
+        }
+        #controlContainer {
+            left: 10px;
+        }
+        .controlButton {
             background-color: white;
             border: none;
             padding: 10px;
@@ -58,6 +64,11 @@
             box-shadow: 0 0 10px rgba(0,0,0,0.3);
             cursor: pointer;
             margin-left: 10px;
+            transition: all 0.3s ease;
+        }
+        .controlButton.active {
+            background-color: #4CAF50;
+            color: white;
         }
         #searchInput {
             display: none;
@@ -66,6 +77,7 @@
             padding: 8px;
             border-radius: 5px;
             border: 1px solid #ccc;
+            transition: all 0.3s ease;
         }
         #message {
             position: absolute;
@@ -78,6 +90,7 @@
             box-shadow: 0 0 10px rgba(0,0,0,0.3);
             z-index: 1000;
             display: none;
+            transition: all 0.3s ease;
         }
         #clearRouteButton {
             position: absolute;
@@ -91,6 +104,32 @@
             cursor: pointer;
             z-index: 1000;
             display: none;
+            transition: all 0.3s ease;
+        }
+        #startRouteMenu {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: white;
+            padding: 10px 20px;
+            border-radius: 25px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+            display: none;
+            transition: all 0.3s ease;
+        }
+        #startRouteButton {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #startRouteButton:hover {
+            background-color: #45a049;
         }
     </style>
 </head>
@@ -101,24 +140,35 @@
         </div>
         <div id="map"></div>
         <div id="searchContainer">
-            <button id="searchButton">🔍</button>
+            <button id="searchButton" class="controlButton">🔍</button>
             <input type="text" id="searchInput" placeholder="Buscar dirección...">
-            <button id="centerButton">📍</button>
+        </div>
+        <div id="controlContainer">
+            <button id="centerButton" class="controlButton">📍</button>
+            <button id="toggleRouteButton" class="controlButton">🖱️</button>
         </div>
         <div id="message"></div>
         <button id="clearRouteButton">Borrar ruta</button>
+        <div id="startRouteMenu">
+            <button id="startRouteButton">Iniciar ruta</button>
+        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script>
         let map, userMarker, routeLayer, currentRoute, start, end;
         let isFollowingRoute = false;
+        let isRouteClickEnabled = false;
+        let routeMode = 'driving';
+        let isNavigating = false;
 
         document.getElementById('locateButton').addEventListener('click', initializeMap);
         document.getElementById('searchButton').addEventListener('click', toggleSearchInput);
         document.getElementById('searchInput').addEventListener('keypress', handleSearchInput);
         document.getElementById('centerButton').addEventListener('click', centerMapOnUser);
         document.getElementById('clearRouteButton').addEventListener('click', clearRoute);
+        document.getElementById('toggleRouteButton').addEventListener('click', toggleRouteClick);
+        document.getElementById('startRouteButton').addEventListener('click', startNavigation);
 
         function initializeMap() {
             document.getElementById('locateButton').style.display = 'none';
@@ -158,14 +208,21 @@
             const latlng = L.latLng(position.coords.latitude, position.coords.longitude);
             
             if (!userMarker) {
-                userMarker = L.marker(latlng).addTo(map)
-                    .bindPopup("Estás aquí").openPopup();
+                userMarker = L.marker(latlng, {
+                    icon: L.divIcon({
+                        className: 'user-marker',
+                        html: '<div style="background-color: #4285F4; width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 3px rgba(0,0,0,0.3);"></div>',
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                    })
+                }).addTo(map);
                 map.setView(latlng, 16);
             } else {
                 userMarker.setLatLng(latlng);
             }
 
-            if (isFollowingRoute && routeLayer) {
+            if (isNavigating) {
+                map.setView(latlng);
                 updateRouteBasedOnPosition(latlng);
             }
         }
@@ -180,12 +237,11 @@
             const distanceToEnd = currentPosition.distanceTo(end);
             if (distanceToEnd < 10) {
                 showMessage("¡Has llegado a tu destino!");
-                isFollowingRoute = false;
+                isNavigating = false;
                 clearRoute();
                 return;
             }
 
-            // Eliminar segmentos de ruta por los que ya ha pasado
             let closestPointIndex = 0;
             let minDistance = Infinity;
             for (let i = 0; i < currentRoute.coordinates.length; i++) {
@@ -197,18 +253,25 @@
                 }
             }
 
-            // Si el usuario está muy lejos de la ruta, recalcular
             if (minDistance > 50) {
                 getRoute(currentPosition, end);
-                return;
+            } else {
+                currentRoute.coordinates = currentRoute.coordinates.slice(closestPointIndex);
+                drawRoute();
             }
+        }
 
-            currentRoute.coordinates = currentRoute.coordinates.slice(closestPointIndex);
-            routeLayer.clearLayers();
-            routeLayer.addData(currentRoute);
+        function drawRoute() {
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+            }
+            routeLayer = L.geoJSON(currentRoute, {
+                style: {color: 'blue', weight: 5, opacity: 0.7}
+            }).addTo(map);
         }
 
         function onMapClick(e) {
+            if (!isRouteClickEnabled) return;
             if (!userMarker) {
                 alert("Espera a que se determine tu ubicación.");
                 return;
@@ -221,7 +284,12 @@
         }
 
         function getRoute(start, end) {
-            const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
+            let url;
+            if (routeMode === 'walking') {
+                url = `https://router.project-osrm.org/route/v1/foot/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
+            } else {
+                url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
+            }
 
             fetch(url)
                 .then(response => response.json())
@@ -238,6 +306,7 @@
                     map.fitBounds(routeLayer.getBounds(), {padding: [30, 30]});
                     isFollowingRoute = true;
                     document.getElementById('clearRouteButton').style.display = 'block';
+                    document.getElementById('startRouteMenu').style.display = 'block';
                 })
                 .catch(error => {
                     console.error('Error:', error);
@@ -253,7 +322,9 @@
             currentRoute = null;
             end = null;
             isFollowingRoute = false;
+            isNavigating = false;
             document.getElementById('clearRouteButton').style.display = 'none';
+            document.getElementById('startRouteMenu').style.display = 'none';
         }
 
         function showMessage(text) {
@@ -267,7 +338,7 @@
 
         function toggleSearchInput() {
             const searchInput = document.getElementById('searchInput');
-            searchInput.style.display = searchInput.style.display === 'block' ? 'none' : 'block';
+            searchInput.style.display = searchInput.style.display === 'none' ? 'block' : 'none';
         }
 
         function handleSearchInput(e) {
@@ -308,6 +379,39 @@
                 startContinuousLocationTracking();
             }
         }
+
+        function toggleRouteClick() {
+            isRouteClickEnabled = !isRouteClickEnabled;
+            document.getElementById('toggleRouteButton').classList.toggle('active');
+        }
+
+        function startNavigation() {
+            isNavigating = true;
+            const userPosition = userMarker.getLatLng();
+            
+            // Hacer zoom importante
+            map.setView(userPosition, 18);
+            
+            // Orientar la ruta hacia arriba
+            if (currentRoute && currentRoute.coordinates.length > 1) {
+                const nextPoint = L.latLng(currentRoute.coordinates[1][1], currentRoute.coordinates[1][0]);
+                const angle = (userPosition.bearingTo(nextPoint) + 360) % 360;
+                map.setBearing(angle);
+            }
+            
+            document.getElementById('startRouteMenu').style.display = 'none';
+        }
+
+        // Añadir esta función para rotar el mapa
+        L.Map.include({
+            setBearing: function(bearing) {
+                this._bearing = bearing;
+                this.fire('rotate');
+            },
+            getBearing: function() {
+                return this._bearing;
+            }
+        });
     </script>
 </body>
 </html>
